@@ -1,0 +1,131 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      Role     @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  events    Event[]  @relation("UserEvents")
+
+  @@index([email])
+  @@index([role])
+  @@map("users")
+}
+
+model Event {
+  id                   String      @id @default(uuid())
+  /// Owner
+  userId               String
+  /// Basic
+  title                String
+  OrganizerName        String
+  shortDescription     String
+  detailedDescription  String
+  category             String
+  tags                 String[]    @default([])
+  /// Time
+  startDateTime        DateTime
+  endDateTime          DateTime
+  timezone             String
+  /// Mode
+  eventMode            EventMode
+  /// Offline
+  venueName            String?
+  address              String?
+  city                 String?
+  state                String?
+  country              String?
+  mapsLink             String?
+  /// Online
+  platform             String?
+  eventLink            String?
+  /// Media
+  banner               String?
+  gallery              String[]    @default([])
+  promoVideoUrl        String?
+  /// Ticket
+  ticketType           TicketType
+  ticketPrice          Float? 
+  currency             String?
+  registrationDeadline DateTime?
+  ticketUrl            String?
+  /// Capacity
+  currentAttendees    Int        @default(0)
+  maxAttendees         Int       @default(100000)
+  ageRestriction       String?
+  dressCode            String?
+  specialInstructions  String?
+  /// Contact
+  contactPhone         String?
+  supportEmail         String?
+  website              String?
+  socialMedia          String?
+  /// Extra
+  refundPolicy         String?
+  /// Admin
+  status               EventStatus @default(PENDING)
+  adminNote            String?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+  bookings             Booking[]
+  user                 User        @relation("UserEvents", fields: [userId], references: [id])
+}
+
+model Booking {
+  id          String        @id @default(uuid())
+  eventId     String
+  email       String
+  phone       String
+  totalAmount Int
+  status      BookingStatus @default(PENDING)
+  createdAt   DateTime      @default(now())
+  attendees   Attendee[]
+  event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+}
+
+model Attendee {
+  id        String  @id @default(uuid())
+  bookingId String
+  name      String
+  age       Int
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+}
+
+enum Role {
+  ADMIN
+  USER
+  GUEST
+}
+
+enum EventMode {
+  OFFLINE
+  ONLINE
+  HYBRID
+}
+
+enum TicketType {
+  FREE
+  PAID
+}
+
+enum EventStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum BookingStatus {
+  PENDING
+  PAID
+  CANCELLED
+}
