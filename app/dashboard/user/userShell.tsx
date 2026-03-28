@@ -66,6 +66,12 @@ export default function UserShell({
     }
   };
 
+  /* ✅ Navigate to Joined Events page */
+  const handleJoinedEventsClick = () => {
+    setProfileOpen(false);
+    router.push("/dashboard/user/joined-event");
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 flex flex-col text-white">
       {/* ================= HEADER ================= */}
@@ -155,9 +161,12 @@ export default function UserShell({
                       )}
 
                       <div className="space-y-1 pt-2">
-                        <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-800 transition">
+                        <button 
+                          onClick={handleJoinedEventsClick}
+                          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-800 transition"
+                        >
                           <Heart className="h-4 w-4 text-slate-400" />
-                          <span className="text-sm">Saved Events</span>
+                          <span className="text-sm">Joined Events</span>
                         </button>
 
                         <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-800 transition">

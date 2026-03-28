@@ -16,6 +16,7 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   events    Event[]  @relation("UserEvents")
+  bookings  Booking[] @relation("UserBookings")
 
   @@index([email])
   @@index([role])
@@ -84,13 +85,17 @@ model Event {
 model Booking {
   id          String        @id @default(uuid())
   eventId     String
+  userId  String?  // ✅ NEW - Links to User
   email       String
   phone       String
   totalAmount Int
   status      BookingStatus @default(PENDING)
+  paymentProof String?
+  expiresAt   DateTime?
   createdAt   DateTime      @default(now())
   attendees   Attendee[]
   event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user        User?         @relation("UserBookings", fields: [userId], references: [id])
 }
 
 model Attendee {

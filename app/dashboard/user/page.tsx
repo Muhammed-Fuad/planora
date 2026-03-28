@@ -1,14 +1,17 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { 
-  Search, MapPin, Calendar, ArrowRight, MessageCircle, X, 
+import React, { useEffect, useState, useMemo } from "react";
+import {
+  Search, MapPin, Calendar, ArrowRight, MessageCircle, X,
   Star, Users, Music, Utensils, Palette,
   Gamepad2, Trophy, Briefcase, Sparkles, Clock,
-  IndianRupee, ChevronDown, ChevronLeft, ChevronRight
+  IndianRupee, ChevronDown, ChevronLeft, ChevronRight,
+  Brain, Navigation, Loader2
 } from "lucide-react";
 import UserShell from "./userShell";
 import { useRouter } from "next/navigation";
+import SmartRecommendations from "./SmartRecommendations";
+import { useGeolocation, useWeather, getDistanceKm } from "./useSmartRecommendations";
 
 type Event = {
   id: string;
@@ -23,6 +26,9 @@ type Event = {
   banner?: string;
   maxAttendees: number;
   current_attendees?: number;
+  lat?: number;
+  lng?: number;
+  distanceKm?: number;
 };
 
 type UserProfile = {
@@ -56,6 +62,7 @@ const categoryImages: Record<string, string> = {
 };
 
 const EVENTS_PER_PAGE = 9;
+const NEARBY_RADIUS_KM = 50;
 
 export default function Page() {
   const router = useRouter();
@@ -66,44 +73,50 @@ export default function Page() {
   const [error, setError] = useState("");
   const [chatMessage, setChatMessage] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
-  const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [user, setUser] = useState<UserProfile | null>(null);
   const [userLoading, setUserLoading] = useState(true);
   const [profileOpen, setProfileOpen] = useState(false);
   const [scrollY, setScrollY] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
 
+  // Smart Picks full-page overlay
+  const [showSmartPicks, setShowSmartPicks] = useState(false);
+
+  // Nearby events view
+  const [showNearbyView, setShowNearbyView] = useState(false);
+
+  const { location, error: locationError, loading: locationLoading, requestLocation } = useGeolocation();
+  const { weather } = useWeather(location);
+
   useEffect(() => {
-    const handleScroll = () => {
-      setScrollY(window.scrollY);
-    };
-    
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => window.removeEventListener('scroll', handleScroll);
+    const handleScroll = () => setScrollY(window.scrollY);
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
   }, []);
+
+  // Lock body scroll when Smart Picks overlay is open
+  useEffect(() => {
+    document.body.style.overflow = showSmartPicks ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [showSmartPicks]);
 
   /* Fetch user profile */
   useEffect(() => {
     async function fetchUserProfile() {
       try {
         setUserLoading(true);
-        const response = await fetch('/api/user/profile', {
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' }
+        const response = await fetch("/api/user/profile", {
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
         });
-        
         if (!response.ok) {
-          if (response.status === 401) {
-            router.push('/login');
-            return;
-          }
-          throw new Error('Failed to fetch user profile');
+          if (response.status === 401) { router.push("/login"); return; }
+          throw new Error("Failed to fetch user profile");
         }
-        
         const userData: UserProfile = await response.json();
         setUser(userData);
       } catch (err) {
-        console.error('Error fetching user profile:', err);
+        console.error("Error fetching user profile:", err);
         setError("Unable to load user profile");
       } finally {
         setUserLoading(false);
@@ -118,33 +131,28 @@ export default function Page() {
       try {
         setLoading(true);
         setError("");
-
-        const response = await fetch('/api/events/show', {
-          method: 'GET',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' }
+        const response = await fetch("/api/events/show", {
+          method: "GET",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
         });
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch events: ${response.status}`);
-        }
-
+        if (!response.ok) throw new Error(`Failed to fetch events: ${response.status}`);
         const eventsList: Event[] = await response.json();
         setEvents(eventsList);
         setResults(eventsList);
       } catch (err) {
-        console.error('Error fetching events:', err);
+        console.error("Error fetching events:", err);
         setError("Unable to load events from database");
       } finally {
         setLoading(false);
       }
     }
-
     fetchEvents();
   }, []);
 
   /* Filter */
   useEffect(() => {
+    if (showNearbyView) return; // nearby view manages its own list
     const q = query.trim().toLowerCase();
     let filtered = events.filter(
       (ev) =>
@@ -154,22 +162,41 @@ export default function Page() {
         ev.city?.toLowerCase().includes(q) ||
         ev.shortDescription?.toLowerCase().includes(q)
     );
-
     if (selectedCategory !== "all") {
       filtered = filtered.filter((ev) => ev.category?.toLowerCase() === selectedCategory);
     }
-
     setResults(filtered);
     setCurrentPage(1);
-  }, [query, events, selectedCategory]);
+  }, [query, events, selectedCategory, showNearbyView]);
 
-  /* Pagination */
-  const totalPages = Math.ceil(results.length / EVENTS_PER_PAGE);
+  /* Nearby events sorted by distance asc */
+  const nearbyEvents = useMemo(() => {
+    if (!location) return [];
+    return events
+      .map((ev) => {
+        if (!ev.lat || !ev.lng) return null;
+        const dist = getDistanceKm(location.lat, location.lng, ev.lat, ev.lng);
+        return dist <= NEARBY_RADIUS_KM ? { ...ev, distanceKm: dist } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a!.distanceKm! - b!.distanceKm!) as Event[];
+  }, [location, events]);
+
+  /* Weather-based events */
+  const weatherEvents = useMemo(() => {
+    if (!weather) return [];
+    return events.filter((ev) =>
+      weather.recommendedCategories.includes(ev.category?.toLowerCase())
+    );
+  }, [weather, events]);
+
+  /* What to show in the grid */
+  const displayEvents = showNearbyView ? nearbyEvents : results;
+  const totalPages = Math.ceil(displayEvents.length / EVENTS_PER_PAGE);
   const startIndex = (currentPage - 1) * EVENTS_PER_PAGE;
-  const currentEvents = results.slice(startIndex, startIndex + EVENTS_PER_PAGE);
+  const currentEvents = displayEvents.slice(startIndex, startIndex + EVENTS_PER_PAGE);
 
   const handleViewEvent = (event: Event) => {
-    // Navigate to the dynamic event detail page
     router.push(`/dashboard/user/${event.id}`);
   };
 
@@ -179,34 +206,21 @@ export default function Page() {
   };
 
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { 
-      weekday: 'short', 
-      year: 'numeric', 
-      month: 'short', 
-      day: 'numeric' 
+    return new Date(dateString).toLocaleDateString("en-US", {
+      weekday: "short", year: "numeric", month: "short", day: "numeric",
     });
   };
 
   const formatTime = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString('en-US', { 
-      hour: '2-digit', 
-      minute: '2-digit'
-    });
+    return new Date(dateString).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
   };
 
   const handleLogout = async () => {
     try {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      router.push('/login');
-    } catch (err) {
-      console.error('Logout error:', err);
-      router.push('/login');
+      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+      router.push("/login");
+    } catch {
+      router.push("/login");
     }
   };
 
@@ -217,8 +231,17 @@ export default function Page() {
   };
 
   const scrollToEvents = () => {
-    const eventsSection = document.getElementById('events-section');
-    eventsSection?.scrollIntoView({ behavior: 'smooth' });
+    document.getElementById("events-section")?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const handleNearbyClick = () => {
+    if (!location) {
+      requestLocation();
+      return;
+    }
+    setShowNearbyView(true);
+    setCurrentPage(1);
+    document.getElementById("events-section")?.scrollIntoView({ behavior: "smooth" });
   };
 
   if (userLoading) {
@@ -237,10 +260,7 @@ export default function Page() {
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
         <div className="text-center">
           <p className="text-red-400 mb-4">Unable to load user profile</p>
-          <button 
-            onClick={() => router.push('/login')}
-            className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
-          >
+          <button onClick={() => router.push("/login")} className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
             Return to Login
           </button>
         </div>
@@ -249,12 +269,7 @@ export default function Page() {
   }
 
   return (
-    <UserShell
-      user={user} 
-      profileOpen={profileOpen} 
-      setProfileOpen={setProfileOpen} 
-      onLogout={handleLogout}
-    >
+    <UserShell user={user} profileOpen={profileOpen} setProfileOpen={setProfileOpen} onLogout={handleLogout}>
       <style>{`
         @keyframes blob {
           0%, 100% { transform: translate(0, 0) scale(1); }
@@ -262,12 +277,10 @@ export default function Page() {
           50% { transform: translate(-20px, 20px) scale(0.9); }
           75% { transform: translate(50px, 50px) scale(1.05); }
         }
-        
         @keyframes gradient {
           0%, 100% { background-position: 0% 50%; }
           50% { background-position: 100% 50%; }
         }
-        
         @keyframes textRotate {
           0% { opacity: 0; transform: translateY(20px); }
           8% { opacity: 1; transform: translateY(0); }
@@ -275,62 +288,49 @@ export default function Page() {
           25% { opacity: 0; transform: translateY(-20px); }
           100% { opacity: 0; transform: translateY(-20px); }
         }
-        
-        .animate-blob {
-          animation: blob 7s infinite;
+        @keyframes overlayIn {
+          from { opacity: 0; transform: translateY(20px); }
+          to   { opacity: 1; transform: translateY(0); }
         }
-        
-        .animation-delay-2000 {
-          animation-delay: 2s;
-        }
-        
-        .animation-delay-4000 {
-          animation-delay: 4s;
-        }
-        
-        .animate-gradient {
-          background-size: 200% 200%;
-          animation: gradient 3s ease infinite;
-        }
-        
-        .rotating-text span {
-          opacity: 0;
-          animation: textRotate 16s ease-in-out infinite;
-        }
-        
-        .rotating-text span:nth-child(1) {
-          animation-delay: 0s;
-        }
-        
-        .rotating-text span:nth-child(2) {
-          animation-delay: 4s;
-        }
-        
-        .rotating-text span:nth-child(3) {
-          animation-delay: 8s;
-        }
-        
-        .rotating-text span:nth-child(4) {
-          animation-delay: 12s;
-        }
-        
-        .scrollbar-hide::-webkit-scrollbar {
-          display: none;
-        }
-        
-        .scrollbar-hide {
-          -ms-overflow-style: none;
-          scrollbar-width: none;
-        }
-        
-        html {
-          scroll-behavior: smooth;
-        }
+        .animate-blob { animation: blob 7s infinite; }
+        .animation-delay-2000 { animation-delay: 2s; }
+        .animation-delay-4000 { animation-delay: 4s; }
+        .animate-gradient { background-size: 200% 200%; animation: gradient 3s ease infinite; }
+        .rotating-text span { opacity: 0; animation: textRotate 16s ease-in-out infinite; }
+        .rotating-text span:nth-child(1) { animation-delay: 0s; }
+        .rotating-text span:nth-child(2) { animation-delay: 4s; }
+        .rotating-text span:nth-child(3) { animation-delay: 8s; }
+        .rotating-text span:nth-child(4) { animation-delay: 12s; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        .overlay-in { animation: overlayIn 0.25s ease forwards; }
+        html { scroll-behavior: smooth; }
       `}</style>
 
       <main className="min-h-screen bg-slate-950 overflow-x-hidden">
-        {/* HERO SECTION */}
+
+        {/* ── SMART PICKS FULL-PAGE OVERLAY ── */}
+        {showSmartPicks && !loading && user && (
+          <div className="overlay-in">
+            <SmartRecommendations
+              events={events}
+              user={user}
+              weather={weather}
+              nearbyEvents={nearbyEvents}
+              weatherEvents={weatherEvents}
+              onViewEvent={handleViewEvent}
+              locationLoading={locationLoading}
+              locationError={locationError}
+              onRequestLocation={requestLocation}
+              userLocation={location}
+              onClose={() => setShowSmartPicks(false)}
+            />
+          </div>
+        )}
+
+        {/* ── HERO SECTION ── */}
         <div className="relative min-h-[75vh] flex items-center justify-center overflow-hidden">
+          {/* Backgrounds */}
           <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-indigo-950 to-purple-950">
             <div className="absolute inset-0 opacity-30">
               <div className="absolute top-0 -left-4 w-72 h-72 bg-purple-500 rounded-full mix-blend-multiply filter blur-3xl animate-blob"></div>
@@ -338,42 +338,50 @@ export default function Page() {
               <div className="absolute -bottom-8 left-20 w-72 h-72 bg-pink-500 rounded-full mix-blend-multiply filter blur-3xl animate-blob animation-delay-4000"></div>
             </div>
           </div>
-
-          <div 
+          <div
             className="absolute inset-0 opacity-20"
             style={{
-              backgroundImage: 'url(https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=1920&q=80)',
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
+              backgroundImage: "url(https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=1920&q=80)",
+              backgroundSize: "cover",
+              backgroundPosition: "center",
               transform: `translateY(${scrollY * 0.5}px)`,
             }}
-          ></div>
+          />
+          <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGRlZnM+PHBhdHRlcm4gaWQ9ImdyaWQiIHdpZHRoPSI2MCIgaGVpZ2h0PSI2MCIgcGF0dGVyblVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PHBhdGggZD0iTSAxMCAwIEwgMCAwIDAgMTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMC41IiBvcGFjaXR5PSIwLjEiLz48L3BhdHRlcm4+PC9kZWZzPjxyZWN0IHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiIGZpbGw9InVybCgjZ3JpZCkiLz48L3N2Zz4=')] opacity-40" />
 
-          <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGRlZnM+PHBhdHRlcm4gaWQ9ImdyaWQiIHdpZHRoPSI2MCIgaGVpZ2h0PSI2MCIgcGF0dGVyblVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PHBhdGggZD0iTSAxMCAwIEwgMCAwIDAgMTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMC41IiBvcGFjaXR5PSIwLjEiLz48L3BhdHRlcm4+PC9kZWZzPjxyZWN0IHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiIGZpbGw9InVybCgjZ3JpZCkiLz48L3N2Zz4=')] opacity-40"></div>
+          {/* ── WEATHER WIDGET — flush top right ── */}
+          <div className="absolute top-0 right-0 z-20">
+            {weather ? (
+              <div className="flex items-center gap-3 px-4 py-2.5 bg-black/30 backdrop-blur-xl rounded-bl-2xl border-b border-l border-white/10 shadow-xl">
+                <span className="text-2xl leading-none">{weather.icon}</span>
+                <div className="text-right">
+                  <p className="text-white font-semibold text-sm leading-tight">{weather.description}</p>
+                  <p className="text-slate-300 text-xs">{Math.round(weather.temperature)}°C</p>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={requestLocation}
+                disabled={locationLoading}
+                className="flex items-center gap-2 px-4 py-2.5 bg-black/30 backdrop-blur-xl rounded-bl-2xl border-b border-l border-white/10 text-sm text-slate-300 hover:bg-black/50 transition-all disabled:opacity-50"
+              >
+                {locationLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Navigation className="h-4 w-4 text-emerald-400" />}
+                {locationLoading ? "Locating..." : "Get Weather"}
+              </button>
+            )}
+          </div>
 
+          {/* Hero content */}
           <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 text-center">
-            <div 
-              className="mb-6"
-              style={{
-                transform: `translateY(${scrollY * -0.2}px)`,
-              }}
-            >
+            <div className="mb-6" style={{ transform: `translateY(${scrollY * -0.2}px)` }}>
               <div className="mb-6">
                 <h2 className="text-5xl md:text-6xl lg:text-7xl font-black leading-tight flex flex-wrap justify-center items-center gap-3 md:gap-4">
                   <span className="text-white">Discover</span>
-                  <span className="relative inline-block rotating-text" style={{ width: '750px', height: '1.2em' }}>
-                    <span className="absolute inset-0 flex items-center justify-start bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent animate-gradient whitespace-nowrap">
-                      Exciting Activities
-                    </span>
-                    <span className="absolute inset-0 flex items-center justify-start bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent animate-gradient whitespace-nowrap">
-                      Hidden Gems
-                    </span>
-                    <span className="absolute inset-0 flex items-center justify-start bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent animate-gradient whitespace-nowrap">
-                      New Connections
-                    </span>
-                    <span className="absolute inset-0 flex items-center justify-start bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent animate-gradient whitespace-nowrap">
-                      Amazing Events
-                    </span>
+                  <span className="relative inline-block rotating-text" style={{ width: "750px", height: "1.2em" }}>
+                    <span className="absolute inset-0 flex items-center justify-start bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent animate-gradient whitespace-nowrap">Exciting Activities</span>
+                    <span className="absolute inset-0 flex items-center justify-start bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent animate-gradient whitespace-nowrap">Hidden Gems</span>
+                    <span className="absolute inset-0 flex items-center justify-start bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent animate-gradient whitespace-nowrap">New Connections</span>
+                    <span className="absolute inset-0 flex items-center justify-start bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent animate-gradient whitespace-nowrap">Amazing Events</span>
                   </span>
                 </h2>
               </div>
@@ -381,43 +389,35 @@ export default function Page() {
                 Join thousands of attendees to find and book the perfect events for you
               </p>
             </div>
-            
-            <div 
-              className="max-w-4xl mx-auto mb-6"
-              style={{
-                transform: `translateY(${scrollY * -0.1}px)`,
-              }}
-            >
+
+            {/* Search bar */}
+            <div className="max-w-4xl mx-auto mb-6" style={{ transform: `translateY(${scrollY * -0.1}px)` }}>
               <div className="bg-white/5 backdrop-blur-2xl rounded-3xl p-8 border border-white/10 shadow-2xl">
                 <div className="relative mb-6">
-                  <MessageCircle className="absolute left-6 top-1/2 -translate-y-1/2 h-6 w-6 text-slate-400" />
+                  <MessageCircle className="absolute left-5 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
                   <input
                     value={chatMessage}
                     onChange={(e) => setChatMessage(e.target.value)}
                     onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
-                    placeholder="Looking for something fun? Ask about any activity or event you're interested in"
-                    className="w-full pl-16 pr-40 py-6 rounded-2xl border-0 bg-white/10 backdrop-blur-sm text-white placeholder-slate-400 text-lg shadow-xl focus:ring-4 focus:ring-purple-500/50 outline-none transition-all"
+                    placeholder="Looking for something fun? Ask about any activity or event"
+                    className="w-full pl-14 pr-28 py-5 rounded-2xl border-0 bg-white/10 backdrop-blur-sm text-white placeholder-slate-400 text-base shadow-xl focus:ring-4 focus:ring-purple-500/50 outline-none transition-all"
                   />
-                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-2">
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2">
                     <button
                       onClick={handleSendMessage}
-                      className="px-6 py-3.5 rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white font-semibold hover:shadow-lg hover:shadow-purple-500/50 transition-all flex items-center gap-2"
+                      className="px-5 py-3 rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white font-semibold hover:shadow-lg hover:shadow-purple-500/50 transition-all flex items-center gap-2"
                     >
-                      <Search className="h-5 w-5" />
+                      <Search className="h-4 w-4" />
                       Ask
                     </button>
                   </div>
                 </div>
-
                 <div className="flex flex-wrap gap-2 justify-center">
                   <span className="text-xs text-slate-400 mr-2 self-center">Popular:</span>
                   {["Music concerts", "Tech workshops", "Food festivals"].map((suggestion) => (
                     <button
                       key={suggestion}
-                      onClick={() => {
-                        setChatMessage(suggestion);
-                        handleSendMessage();
-                      }}
+                      onClick={() => { setChatMessage(suggestion); handleSendMessage(); }}
                       className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-sm text-white font-medium transition-all backdrop-blur-sm border border-white/10"
                     >
                       {suggestion}
@@ -427,32 +427,30 @@ export default function Page() {
               </div>
             </div>
 
-            <button 
-              onClick={scrollToEvents}
-              className="inline-flex flex-col items-center gap-2 text-white/60 hover:text-white transition-all animate-bounce"
-            >
+            <button onClick={scrollToEvents} className="inline-flex flex-col items-center gap-2 text-white/60 hover:text-white transition-all animate-bounce">
               <span className="text-sm">Explore Events</span>
               <ChevronDown className="h-6 w-6" />
             </button>
           </div>
         </div>
 
-        {/* EVENTS SECTION */}
+        {/* ── EVENTS SECTION ── */}
         <div id="events-section" className="relative bg-slate-950 py-20">
+          {/* Sticky category bar */}
           <div className="sticky top-20 z-40 bg-slate-950/95 backdrop-blur-xl border-y border-white/5 mb-12">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
               <div className="flex items-center gap-3 py-6 overflow-x-auto scrollbar-hide">
                 {eventCategories.map((cat) => {
                   const Icon = cat.icon;
-                  const isSelected = selectedCategory === cat.id;
+                  const isSelected = selectedCategory === cat.id && !showNearbyView;
                   return (
                     <button
                       key={cat.id}
-                      onClick={() => setSelectedCategory(cat.id)}
+                      onClick={() => { setSelectedCategory(cat.id); setShowNearbyView(false); setCurrentPage(1); }}
                       className={`flex items-center gap-2 px-6 py-3 rounded-2xl font-medium whitespace-nowrap transition-all ${
                         isSelected
-                          ? 'bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white shadow-lg shadow-purple-500/30'
-                          : 'bg-white/5 text-slate-300 hover:bg-white/10 border border-white/10'
+                          ? "bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white shadow-lg shadow-purple-500/30"
+                          : "bg-white/5 text-slate-300 hover:bg-white/10 border border-white/10"
                       }`}
                     >
                       <Icon className="h-4 w-4" />
@@ -470,25 +468,80 @@ export default function Page() {
           </div>
 
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between mb-10">
-              <div className="flex items-center gap-4">
+            {/* Section header */}
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-4">
+              <div className="flex items-center gap-3 flex-wrap">
                 <h3 className="text-3xl font-bold text-white">
-                  {selectedCategory === "all" ? "All Events" : eventCategories.find(c => c.id === selectedCategory)?.name}
+                  {showNearbyView ? "Nearby Events" : selectedCategory === "all" ? "All Events" : eventCategories.find((c) => c.id === selectedCategory)?.name}
                 </h3>
                 <span className="px-4 py-2 bg-purple-500/20 text-purple-300 rounded-full text-sm font-semibold border border-purple-500/30">
-                  {results.length} events
+                  {displayEvents.length} events
                 </span>
+                {showNearbyView && (
+                  <button
+                    onClick={() => { setShowNearbyView(false); setCurrentPage(1); }}
+                    className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-white transition-colors"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Back to all
+                  </button>
+                )}
               </div>
 
-              <div className="relative max-w-md hidden md:block">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search events..."
-                  className="w-full pl-12 pr-4 py-3.5 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm text-white placeholder-slate-400 focus:border-purple-500/50 focus:ring-2 focus:ring-purple-500/20 outline-none text-sm transition-all"
-                />
+              {/* Right: Smart Picks + Search */}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setShowSmartPicks(true)}
+                  disabled={loading}
+                  className="flex items-center gap-2 px-5 py-3 rounded-2xl text-sm font-semibold transition-all border bg-gradient-to-r from-indigo-600/20 via-purple-600/20 to-pink-600/20 text-purple-300 border-purple-500/30 hover:from-indigo-600/30 hover:via-purple-600/30 hover:to-pink-600/30 disabled:opacity-50"
+                >
+                  <Brain className="h-4 w-4" />
+                  Smart Picks
+                </button>
+
+                <div className="relative max-w-xs hidden md:block">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
+                  <input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search events..."
+                    className="w-full pl-12 pr-4 py-3.5 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm text-white placeholder-slate-400 focus:border-purple-500/50 focus:ring-2 focus:ring-purple-500/20 outline-none text-sm transition-all"
+                  />
+                </div>
               </div>
+            </div>
+
+            {/* ── NEARBY EVENTS ROW — just under the heading ── */}
+            <div className="flex items-center gap-3 mb-10">
+              {!showNearbyView ? (
+                <button
+                  onClick={handleNearbyClick}
+                  disabled={locationLoading}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all border ${
+                    location
+                      ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/25"
+                      : "bg-white/5 text-slate-400 border-white/10 hover:bg-white/10 hover:text-slate-200"
+                  } disabled:opacity-50`}
+                >
+                  {locationLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Navigation className="h-4 w-4" />
+                  )}
+                  {locationLoading
+                    ? "Getting location..."
+                    : location
+                    ? `Nearby Events (${nearbyEvents.length})`
+                    : "Nearby Events"}
+                </button>
+              ) : (
+                <div className="flex items-center gap-3 p-3 bg-emerald-500/10 rounded-xl border border-emerald-500/20">
+                  <Navigation className="h-4 w-4 text-emerald-400 flex-shrink-0" />
+                  <p className="text-sm text-emerald-200">
+                    Showing <span className="font-bold">{nearbyEvents.length} events</span> within {NEARBY_RADIUS_KM} km · sorted by distance
+                  </p>
+                </div>
+              )}
             </div>
 
             {loading && (
@@ -521,18 +574,19 @@ export default function Page() {
                 {currentEvents.length === 0 ? (
                   <div className="bg-white/5 border-2 border-white/10 p-20 rounded-3xl text-center backdrop-blur-sm">
                     <div className="w-24 h-24 bg-white/10 rounded-full mx-auto mb-8 flex items-center justify-center">
-                      <Search className="h-12 w-12 text-slate-400" />
+                      {showNearbyView ? <Navigation className="h-12 w-12 text-slate-400" /> : <Search className="h-12 w-12 text-slate-400" />}
                     </div>
-                    <p className="text-white font-semibold text-2xl mb-3">No events found</p>
-                    <p className="text-slate-400 mb-8">Try adjusting your search or filters</p>
+                    <p className="text-white font-semibold text-2xl mb-3">
+                      {showNearbyView ? "No events nearby" : "No events found"}
+                    </p>
+                    <p className="text-slate-400 mb-8">
+                      {showNearbyView ? `No events within ${NEARBY_RADIUS_KM} km of your location` : "Try adjusting your search or filters"}
+                    </p>
                     <button
-                      onClick={() => {
-                        setQuery("");
-                        setSelectedCategory("all");
-                      }}
+                      onClick={() => { setShowNearbyView(false); setQuery(""); setSelectedCategory("all"); }}
                       className="px-8 py-4 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white rounded-2xl hover:shadow-lg hover:shadow-purple-500/50 transition-all font-semibold"
                     >
-                      Clear Filters
+                      {showNearbyView ? "View All Events" : "Clear Filters"}
                     </button>
                   </div>
                 ) : (
@@ -542,28 +596,36 @@ export default function Page() {
                         <article
                           key={event.id}
                           className="group bg-white/5 rounded-3xl overflow-hidden backdrop-blur-sm border border-white/10 hover:border-purple-500/50 transition-all duration-500 hover:shadow-2xl hover:shadow-purple-500/20 hover:-translate-y-2"
-                          style={{
-                            animationDelay: `${idx * 100}ms`,
-                          }}
+                          style={{ animationDelay: `${idx * 100}ms` }}
                         >
                           <div className="relative h-64 overflow-hidden bg-slate-900">
                             <img
                               src={getEventImage(event)}
                               alt={event.title}
                               className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
-                              onError={(e) => {
-                                const target = e.target as HTMLImageElement;
-                                target.src = categoryImages.default;
-                              }}
+                              onError={(e) => { (e.target as HTMLImageElement).src = categoryImages.default; }}
                             />
-                            <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/50 to-transparent"></div>
-                            
+                            <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/50 to-transparent" />
                             <div className="absolute top-4 left-4">
                               <span className="px-4 py-2 bg-white/90 backdrop-blur-sm rounded-full text-xs font-bold text-slate-900 shadow-xl capitalize">
                                 {event.category}
                               </span>
                             </div>
-
+                            {event.distanceKm !== undefined && (
+                              <div className="absolute top-4 left-32">
+                                <span className="px-3 py-2 bg-emerald-500/90 backdrop-blur-sm rounded-full text-xs font-bold text-white shadow-xl flex items-center gap-1">
+                                  <MapPin className="h-3 w-3" />
+                                  {event.distanceKm < 1 ? "<1" : Math.round(event.distanceKm)} km
+                                </span>
+                              </div>
+                            )}
+                            {weather && weather.recommendedCategories.includes(event.category?.toLowerCase()) && (
+                              <div className="absolute bottom-4 left-4">
+                                <span className="px-3 py-1.5 bg-sky-500/80 backdrop-blur-sm rounded-full text-xs font-semibold text-white shadow-lg flex items-center gap-1">
+                                  {weather.icon} Weather Pick
+                                </span>
+                              </div>
+                            )}
                             <div className="absolute top-4 right-4">
                               <div className="w-10 h-10 bg-white/90 backdrop-blur-sm rounded-full flex items-center justify-center shadow-xl">
                                 <Star className="h-5 w-5 text-amber-500 fill-amber-500" />
@@ -575,44 +637,35 @@ export default function Page() {
                             <h3 className="font-bold text-xl text-white mb-4 line-clamp-2 group-hover:text-purple-400 transition-colors min-h-[3.5rem]">
                               {event.title}
                             </h3>
-                            
                             <div className="space-y-3 mb-5">
                               <div className="flex items-center gap-3 text-sm text-slate-300">
                                 <MapPin className="h-4 w-4 text-purple-400 flex-shrink-0" />
                                 <span className="line-clamp-1">{event.venueName}, {event.city}</span>
                               </div>
-                              
                               <div className="flex items-center gap-3 text-sm text-slate-300">
                                 <Calendar className="h-4 w-4 text-purple-400 flex-shrink-0" />
                                 <span>{formatDate(event.startDateTime)}</span>
                               </div>
-
                               <div className="flex items-center gap-3 text-sm text-slate-300">
                                 <Clock className="h-4 w-4 text-purple-400 flex-shrink-0" />
                                 <span>{formatTime(event.startDateTime)}</span>
                               </div>
                             </div>
-
                             <p className="text-sm text-slate-400 line-clamp-2 mb-5 leading-relaxed">
                               {event.shortDescription}
                             </p>
-
                             <div className="flex items-center justify-between pt-5 border-t border-white/10">
                               <div className="flex items-center gap-1">
-                                {/* If ticketPrice is null, undefined, or 0, show "FREE" */}
                                 {!event.ticketPrice || event.ticketPrice === 0 ? (
                                   <span className="text-2xl font-bold text-green-400">FREE</span>
                                 ) : (
                                   <>
                                     <IndianRupee className="h-5 w-5 text-green-400" />
-                                    <span className="text-2xl font-bold text-white">
-                                      {event.ticketPrice}
-                                    </span>
+                                    <span className="text-2xl font-bold text-white">{event.ticketPrice}</span>
                                   </>
                                 )}
                               </div>
-                              
-                              <button 
+                              <button
                                 onClick={() => handleViewEvent(event)}
                                 className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white text-sm font-semibold hover:shadow-lg hover:shadow-purple-500/50 transition-all group"
                               >
@@ -625,7 +678,6 @@ export default function Page() {
                       ))}
                     </div>
 
-                    {/* PAGINATION */}
                     {totalPages > 1 && (
                       <div className="flex justify-center items-center gap-6 mt-12">
                         <button
@@ -635,28 +687,21 @@ export default function Page() {
                         >
                           <ChevronLeft className="h-5 w-5" />
                         </button>
-                        
                         <div className="flex items-center gap-2">
                           {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
                             let pageNum;
-                            if (totalPages <= 5) {
-                              pageNum = i + 1;
-                            } else if (currentPage <= 3) {
-                              pageNum = i + 1;
-                            } else if (currentPage >= totalPages - 2) {
-                              pageNum = totalPages - 4 + i;
-                            } else {
-                              pageNum = currentPage - 2 + i;
-                            }
-                            
+                            if (totalPages <= 5) pageNum = i + 1;
+                            else if (currentPage <= 3) pageNum = i + 1;
+                            else if (currentPage >= totalPages - 2) pageNum = totalPages - 4 + i;
+                            else pageNum = currentPage - 2 + i;
                             return (
                               <button
                                 key={pageNum}
                                 onClick={() => setCurrentPage(pageNum)}
                                 className={`w-10 h-10 rounded-xl font-semibold transition-all ${
                                   currentPage === pageNum
-                                    ? 'bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white shadow-lg shadow-purple-500/30'
-                                    : 'bg-white/5 text-slate-300 hover:bg-white/10 border border-white/10'
+                                    ? "bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white shadow-lg shadow-purple-500/30"
+                                    : "bg-white/5 text-slate-300 hover:bg-white/10 border border-white/10"
                                 }`}
                               >
                                 {pageNum}
@@ -664,7 +709,6 @@ export default function Page() {
                             );
                           })}
                         </div>
-
                         <button
                           onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                           disabled={currentPage === totalPages}
@@ -680,120 +724,6 @@ export default function Page() {
             )}
           </div>
         </div>
-
-        {/* EVENT DETAILS MODAL - Optional: You can keep this for quick preview or remove it */}
-        {selectedEvent && (
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-xl z-50 flex items-center justify-center p-4 overflow-y-auto">
-            <div className="bg-slate-900 rounded-3xl max-w-4xl w-full shadow-2xl my-8 border border-white/10">
-              <div className="relative h-80 rounded-t-3xl overflow-hidden">
-                <img
-                  src={getEventImage(selectedEvent)}
-                  alt={selectedEvent.title}
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/50 to-transparent"></div>
-                <button
-                  onClick={() => setSelectedEvent(null)}
-                  className="absolute top-6 right-6 w-12 h-12 bg-white/10 backdrop-blur-xl rounded-full flex items-center justify-center hover:bg-white/20 transition-all border border-white/20"
-                >
-                  <X className="h-6 w-6 text-white" />
-                </button>
-                <div className="absolute bottom-6 left-8">
-                  <span className="px-4 py-2 bg-white/90 backdrop-blur-sm rounded-full text-sm font-bold text-slate-900 capitalize shadow-xl">
-                    {selectedEvent.category}
-                  </span>
-                </div>
-              </div>
-              
-              <div className="p-8">
-                <h2 className="text-4xl font-bold text-white mb-8">
-                  {selectedEvent.title}
-                </h2>
-
-                <div className="grid md:grid-cols-2 gap-5 mb-8">
-                  <div className="flex items-start gap-4 p-5 bg-white/5 rounded-2xl border border-white/10 backdrop-blur-sm">
-                    <Calendar className="h-6 w-6 text-purple-400 mt-1 flex-shrink-0" />
-                    <div>
-                      <p className="text-xs text-slate-400 mb-2">Date & Time</p>
-                      <p className="font-semibold text-white text-lg">{formatDate(selectedEvent.startDateTime)}</p>
-                      <p className="text-sm text-slate-300">{formatTime(selectedEvent.startDateTime)}</p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-start gap-4 p-5 bg-white/5 rounded-2xl border border-white/10 backdrop-blur-sm">
-                    <MapPin className="h-6 w-6 text-purple-400 mt-1 flex-shrink-0" />
-                    <div>
-                      <p className="text-xs text-slate-400 mb-2">Venue</p>
-                      <p className="font-semibold text-white text-lg">{selectedEvent.venueName}</p>
-                      <p className="text-sm text-slate-300">{selectedEvent.city}, {selectedEvent.country}</p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-start gap-4 p-5 bg-white/5 rounded-2xl border border-white/10 backdrop-blur-sm">
-                    <IndianRupee className="h-6 w-6 text-green-400 mt-1 flex-shrink-0" />
-                    <div>
-                      <p className="text-xs text-slate-400 mb-2">Price</p>
-                      <p className="text-3xl font-bold text-white">₹{selectedEvent.ticketPrice}</p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-start gap-4 p-5 bg-white/5 rounded-2xl border border-white/10 backdrop-blur-sm">
-                    <Users className="h-6 w-6 text-blue-400 mt-1 flex-shrink-0" />
-                    <div>
-                      <p className="text-xs text-slate-400 mb-2">Capacity</p>
-                      <p className="font-semibold text-white text-lg">{selectedEvent.maxAttendees} attendees</p>
-                      <p className="text-sm text-slate-300">{selectedEvent.current_attendees || 0} registered</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mb-8">
-                  <h3 className="text-xl font-semibold text-white mb-4">About this event</h3>
-                  <p className="text-slate-300 leading-relaxed text-lg">
-                    {selectedEvent.shortDescription}
-                  </p>
-                </div>
-
-                {selectedEvent.maxAttendees && (
-                  <div className="flex items-center gap-3 p-5 bg-gradient-to-r from-purple-500/10 to-pink-500/10 rounded-2xl mb-8 border border-purple-500/20">
-                    <Users className="h-6 w-6 text-purple-400" />
-                    <div className="flex-1">
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-sm text-slate-300">
-                          <span className="font-bold text-white">{selectedEvent.current_attendees || 0}</span> / {selectedEvent.maxAttendees} spots filled
-                        </span>
-                        <span className="text-sm font-semibold text-purple-400">
-                          {Math.round(((selectedEvent.current_attendees || 0) / selectedEvent.maxAttendees) * 100)}%
-                        </span>
-                      </div>
-                      <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
-                        <div 
-                          className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full transition-all duration-500"
-                          style={{ width: `${Math.min(((selectedEvent.current_attendees || 0) / selectedEvent.maxAttendees) * 100, 100)}%` }}
-                        ></div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex gap-4">
-                  <button
-                    onClick={() => setSelectedEvent(null)}
-                    className="flex-1 px-8 py-4 rounded-2xl border-2 border-white/10 text-white font-semibold hover:bg-white/5 transition-all"
-                  >
-                    Close
-                  </button>
-                  <button
-                    onClick={() => router.push(`/dashboard/user/${selectedEvent.id}`)}
-                    className="flex-1 px-8 py-4 rounded-2xl bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white font-semibold hover:shadow-lg hover:shadow-purple-500/50 transition-all"
-                  >
-                    Book Now
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </main>
     </UserShell>
   );

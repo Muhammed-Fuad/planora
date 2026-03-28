@@ -5,7 +5,6 @@ import {
   Search,
   Calendar,
   MapPin,
-  Star,
   ArrowRight,
   X,
   Sparkles,
@@ -148,7 +147,6 @@ export default function EventDiscoveryPage() {
       if (!res.ok) throw new Error("Failed to fetch events");
 
       const data = await res.json();
-      console.log("RAW API RESPONSE:", data);
 
       const venues: EventItem[] = Array.isArray(data?.venues)
         ? data.venues
@@ -156,45 +154,14 @@ export default function EventDiscoveryPage() {
         ? data
         : [];
 
-      console.log("VENUES ARRAY:", venues);
-      console.log("FIRST EVENT SAMPLE:", venues[0]);
-
-      // Category list without "all"
       const categoryList = ["music", "food", "art", "sports", "tech", "business"];
 
-      const enriched = venues.map((e, index) => {
-        // Check if API provides category, log it
-        console.log(`Event ${index} API category:`, e.category);
-        
-        // Always assign a category from our list (ignoring API category for now)
-        const assignedCategory = categoryList[index % categoryList.length];
-        
-        console.log(`Event ${index}: "${e.name}" -> Assigned Category: ${assignedCategory}`);
-        
-        return {
-          ...e,
-          category: assignedCategory,
-          rating: e.rating ?? (Math.random() * 2 + 3).toFixed(1),
-          attendees: e.attendees ?? Math.floor(Math.random() * 500) + 50,
-        };
-      });
-
-      console.log("=== ENRICHED EVENTS ===");
-      console.log("Total events:", enriched.length);
-      enriched.forEach((e, i) => {
-        console.log(`${i}. ${e.name} - Category: ${e.category}`);
-      });
-      
-      console.log("=== CATEGORY COUNTS ===");
-      const counts = {
-        music: enriched.filter(e => e.category === "music").length,
-        food: enriched.filter(e => e.category === "food").length,
-        art: enriched.filter(e => e.category === "art").length,
-        sports: enriched.filter(e => e.category === "sports").length,
-        tech: enriched.filter(e => e.category === "tech").length,
-        business: enriched.filter(e => e.category === "business").length,
-      };
-      console.log(counts);
+      const enriched = venues.map((e, index) => ({
+        ...e,
+        category: e.category ?? categoryList[index % categoryList.length],
+        rating: e.rating ?? (Math.random() * 2 + 3).toFixed(1),
+        attendees: e.attendees ?? Math.floor(Math.random() * 500) + 50,
+      }));
 
       setEvents(enriched);
       setFilteredEvents(enriched);
@@ -225,13 +192,9 @@ export default function EventDiscoveryPage() {
     }
 
     if (selectedCategory !== "all") {
-      result = result.filter((e) => {
-        console.log(`Event: ${e.name}, Category: ${e.category}, Selected: ${selectedCategory}, Match: ${e.category === selectedCategory}`);
-        return e.category === selectedCategory;
-      });
+      result = result.filter((e) => e.category === selectedCategory);
     }
 
-    console.log(`Filter applied - Selected: ${selectedCategory}, Results: ${result.length}/${events.length}`);
     setFilteredEvents(result);
     setCurrentPage(1);
   }, [searchTerm, selectedCategory, events]);
@@ -241,36 +204,17 @@ export default function EventDiscoveryPage() {
   const startIndex = (currentPage - 1) * EVENTS_PER_PAGE;
   const currentEvents = filteredEvents.slice(startIndex, startIndex + EVENTS_PER_PAGE);
 
-  const getEventImage = (e: EventItem, index: number) => {
+  const getEventImage = (e: EventItem) => {
     if (e.image_url) return e.image_url;
     const category = e.category || "default";
     const images = categoryImages[category] || categoryImages.default;
-    // Use a hash of the event name to consistently select the same image for this event
-    const hash = e.name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const hash = e.name.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
     return images[hash % images.length];
-  };
-
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { 
-      weekday: 'short', 
-      year: 'numeric', 
-      month: 'short', 
-      day: 'numeric' 
-    });
-  };
-
-  const formatTime = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString('en-US', { 
-      hour: '2-digit', 
-      minute: '2-digit'
-    });
   };
 
   const handleViewEvent = (event: EventItem) => {
     if (event.event_url) {
-      window.open(event.event_url, '_blank');
+      window.open(event.event_url, "_blank");
     }
   };
 
@@ -284,228 +228,252 @@ export default function EventDiscoveryPage() {
       onLogout={handleLogout}
     >
       <style>{`
-        .scrollbar-hide::-webkit-scrollbar {
-          display: none;
-        }
-        
-        .scrollbar-hide {
-          -ms-overflow-style: none;
-          scrollbar-width: none;
-        }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
 
       <div className="min-h-screen bg-slate-950">
-        {/* EVENTS SECTION */}
-        <div className="relative bg-slate-950 py-20">
-          <div className="sticky top-20 z-40 bg-slate-950/95 backdrop-blur-xl border-y border-white/5 mb-12">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-              <div className="flex items-center gap-3 py-6 overflow-x-auto scrollbar-hide">
-                {eventCategories.map((cat) => {
-                  const Icon = cat.icon;
-                  const isSelected = selectedCategory === cat.id;
-                  return (
-                    <button
-                      key={cat.id}
-                      onClick={() => setSelectedCategory(cat.id)}
-                      className={`flex items-center gap-2 px-6 py-3 rounded-2xl font-medium whitespace-nowrap transition-all ${
-                        isSelected
-                          ? 'bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white shadow-lg shadow-purple-500/30'
-                          : 'bg-white/5 text-slate-300 hover:bg-white/10 border border-white/10'
-                      }`}
-                    >
-                      <Icon className="h-4 w-4" />
-                      <span className="text-sm">{cat.name}</span>
-                      {isSelected && cat.id !== "all" && (
-                        <span className="ml-1 px-2.5 py-0.5 bg-white/20 rounded-full text-xs font-bold">
-                          {filteredEvents.length}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
+        {/* CATEGORY FILTER BAR */}
+        <div className="sticky top-20 z-40 bg-slate-950/95 backdrop-blur-xl border-y border-white/5 mb-12">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex items-center gap-3 py-6 overflow-x-auto scrollbar-hide">
+              {eventCategories.map((cat) => {
+                const Icon = cat.icon;
+                const isSelected = selectedCategory === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => setSelectedCategory(cat.id)}
+                    className={`flex items-center gap-2 px-6 py-3 rounded-2xl font-medium whitespace-nowrap transition-all ${
+                      isSelected
+                        ? "bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white shadow-lg shadow-purple-500/30"
+                        : "bg-white/5 text-slate-300 hover:bg-white/10 border border-white/10"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4" />
+                    <span className="text-sm">{cat.name}</span>
+                    {isSelected && cat.id !== "all" && (
+                      <span className="ml-1 px-2.5 py-0.5 bg-white/20 rounded-full text-xs font-bold">
+                        {filteredEvents.length}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* MAIN CONTENT */}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-20">
+          {/* HEADER ROW */}
+          <div className="flex items-center justify-between mb-10">
+            <div className="flex items-center gap-4">
+              <h3 className="text-3xl font-bold text-white">
+                {selectedCategory === "all"
+                  ? "All Events"
+                  : eventCategories.find((c) => c.id === selectedCategory)?.name}
+              </h3>
+              <span className="px-4 py-2 bg-purple-500/20 text-purple-300 rounded-full text-sm font-semibold border border-purple-500/30">
+                {filteredEvents.length} events
+              </span>
+            </div>
+
+            <div className="relative max-w-md hidden md:block">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
+              <input
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search events..."
+                className="w-full pl-12 pr-4 py-3.5 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm text-white placeholder-slate-400 focus:border-purple-500/50 focus:ring-2 focus:ring-purple-500/20 outline-none text-sm transition-all"
+              />
             </div>
           </div>
 
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between mb-10">
-              <div className="flex items-center gap-4">
-                <h3 className="text-3xl font-bold text-white">
-                  {selectedCategory === "all" ? "All Events" : eventCategories.find(c => c.id === selectedCategory)?.name}
-                </h3>
-                <span className="px-4 py-2 bg-purple-500/20 text-purple-300 rounded-full text-sm font-semibold border border-purple-500/30">
-                  {filteredEvents.length} events
-                </span>
-              </div>
-
-              <div className="relative max-w-md hidden md:block">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
-                <input
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Search events..."
-                  className="w-full pl-12 pr-4 py-3.5 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm text-white placeholder-slate-400 focus:border-purple-500/50 focus:ring-2 focus:ring-purple-500/20 outline-none text-sm transition-all"
-                />
-              </div>
-            </div>
-
-            {loading && (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {[1, 2, 3, 4, 5, 6].map((i) => (
-                  <div key={i} className="bg-white/5 rounded-2xl overflow-hidden backdrop-blur-sm border border-white/10 animate-pulse">
-                    <div className="h-64 bg-white/10"></div>
-                    <div className="p-4 space-y-3">
-                      <div className="h-4 bg-white/10 rounded w-1/2"></div>
-                      <div className="h-4 bg-white/10 rounded w-2/3"></div>
-                      <div className="h-6 bg-white/10 rounded w-1/3"></div>
-                    </div>
+          {/* LOADING SKELETON */}
+          {loading && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              {[1, 2, 3, 4, 5, 6].map((i) => (
+                <div
+                  key={i}
+                  className="bg-white/5 rounded-2xl overflow-hidden border border-white/10 animate-pulse"
+                >
+                  <div className="h-64 bg-white/10" />
+                  <div className="p-5 space-y-3">
+                    <div className="h-4 bg-white/10 rounded w-3/4" />
+                    <div className="h-4 bg-white/10 rounded w-1/2" />
+                    <div className="h-4 bg-white/10 rounded w-2/3" />
+                    <div className="h-6 bg-white/10 rounded w-1/3 mt-2" />
                   </div>
-                ))}
-              </div>
-            )}
-
-            {error && (
-              <div className="bg-red-500/10 border-2 border-red-500/20 p-12 rounded-3xl text-center backdrop-blur-sm">
-                <div className="w-20 h-20 bg-red-500/20 rounded-full mx-auto mb-6 flex items-center justify-center">
-                  <X className="h-10 w-10 text-red-400" />
                 </div>
-                <p className="font-semibold text-red-400 text-xl mb-2">⚠️ {error}</p>
-                <p className="text-sm text-red-300/70">Please check your connection and try again</p>
-              </div>
-            )}
+              ))}
+            </div>
+          )}
 
-            {!loading && !error && (
-              <>
-                {currentEvents.length === 0 ? (
-                  <div className="bg-white/5 border-2 border-white/10 p-20 rounded-3xl text-center backdrop-blur-sm">
-                    <div className="w-24 h-24 bg-white/10 rounded-full mx-auto mb-8 flex items-center justify-center">
-                      <Search className="h-12 w-12 text-slate-400" />
-                    </div>
-                    <p className="text-white font-semibold text-2xl mb-3">No events found</p>
-                    <p className="text-slate-400 mb-8">Try adjusting your search or filters</p>
-                    <button
-                      onClick={() => {
-                        setSearchTerm("");
-                        setSelectedCategory("all");
-                      }}
-                      className="px-8 py-4 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white rounded-2xl hover:shadow-lg hover:shadow-purple-500/50 transition-all font-semibold"
-                    >
-                      Clear Filters
-                    </button>
+          {/* ERROR */}
+          {error && (
+            <div className="bg-red-500/10 border-2 border-red-500/20 p-12 rounded-3xl text-center">
+              <div className="w-20 h-20 bg-red-500/20 rounded-full mx-auto mb-6 flex items-center justify-center">
+                <X className="h-10 w-10 text-red-400" />
+              </div>
+              <p className="font-semibold text-red-400 text-xl mb-2">⚠️ {error}</p>
+              <p className="text-sm text-red-300/70">Please check your connection and try again</p>
+              <button
+                onClick={fetchEvents}
+                className="mt-6 px-6 py-3 bg-red-500/20 text-red-300 border border-red-500/30 rounded-xl hover:bg-red-500/30 transition-all font-medium"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {/* EVENTS GRID */}
+          {!loading && !error && (
+            <>
+              {currentEvents.length === 0 ? (
+                <div className="bg-white/5 border-2 border-white/10 p-20 rounded-3xl text-center">
+                  <div className="w-24 h-24 bg-white/10 rounded-full mx-auto mb-8 flex items-center justify-center">
+                    <Search className="h-12 w-12 text-slate-400" />
                   </div>
-                ) : (
-                  <>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                      {currentEvents.map((event, idx) => {
-                        const absoluteIndex = startIndex + idx;
-                        return (
-                        <article
-                          key={idx}
-                          onClick={() => handleViewEvent(event)}
-                          className="group bg-slate-900/50 rounded-2xl overflow-hidden backdrop-blur-sm border border-white/10 hover:border-purple-500/50 transition-all duration-500 hover:shadow-2xl hover:shadow-purple-500/20 hover:-translate-y-2 cursor-pointer"
-                          style={{
-                            animationDelay: `${idx * 100}ms`,
-                          }}
-                        >
-                          <div className="relative h-64 overflow-hidden bg-slate-900">
-                            <img
-                              src={getEventImage(event, absoluteIndex)}
-                              alt={event.name}
-                              className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
-                              onError={(e) => {
-                                const target = e.target as HTMLImageElement;
-                                target.src = categoryImages.default[0];
-                              }}
-                            />
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent"></div>
-                            
-                            <div className="absolute top-4 left-4">
-                              <span className="px-3 py-1.5 bg-white/95 backdrop-blur-sm rounded-md text-xs font-bold text-slate-900 shadow-lg capitalize">
-                                {event.category}
+                  <p className="text-white font-semibold text-2xl mb-3">No events found</p>
+                  <p className="text-slate-400 mb-8">Try adjusting your search or filters</p>
+                  <button
+                    onClick={() => {
+                      setSearchTerm("");
+                      setSelectedCategory("all");
+                    }}
+                    className="px-8 py-4 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white rounded-2xl hover:shadow-lg hover:shadow-purple-500/50 transition-all font-semibold"
+                  >
+                    Clear Filters
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                    {currentEvents.map((event, idx) => (
+                      <article
+                        key={idx}
+                        onClick={() => handleViewEvent(event)}
+                        className="group bg-slate-900/50 rounded-2xl overflow-hidden border border-white/10 hover:border-purple-500/50 transition-all duration-500 hover:shadow-2xl hover:shadow-purple-500/20 hover:-translate-y-2 cursor-pointer"
+                      >
+                        {/* IMAGE */}
+                        <div className="relative h-56 overflow-hidden bg-slate-900">
+                          <img
+                            src={getEventImage(event)}
+                            alt={event.name}
+                            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).src = categoryImages.default[0];
+                            }}
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
+
+                          {/* Category badge */}
+                          <div className="absolute top-4 left-4">
+                            <span className="px-3 py-1.5 bg-white/95 backdrop-blur-sm rounded-md text-xs font-bold text-slate-900 shadow-lg capitalize">
+                              {event.category}
+                            </span>
+                          </div>
+
+                          {/* Event name overlay */}
+                          <div className="absolute bottom-4 left-4 right-4">
+                            <h3 className="font-bold text-lg text-white line-clamp-2 group-hover:text-purple-300 transition-colors leading-snug">
+                              {event.name}
+                            </h3>
+                          </div>
+                        </div>
+
+                        {/* CARD BODY */}
+                        <div className="p-5 space-y-3">
+                          {/* Date — rendered directly from API string */}
+                          <div className="flex items-start gap-2 text-sm text-slate-300">
+                            <Calendar className="h-4 w-4 text-purple-400 flex-shrink-0 mt-0.5" />
+                            <span className="leading-snug">
+                              {event.date || "Date TBA"}
+                            </span>
+                          </div>
+
+                          {/* Location */}
+                          <div className="flex items-start gap-2 text-sm text-slate-300">
+                            <MapPin className="h-4 w-4 text-purple-400 flex-shrink-0 mt-0.5" />
+                            <span className="line-clamp-1 capitalize">
+                              {event.location || "Location TBA"}
+                            </span>
+                          </div>
+
+                          {/* Price + CTA */}
+                          <div className="flex items-center justify-between pt-3 border-t border-white/10">
+                            <div className="flex items-center gap-1">
+                              <IndianRupee className="h-4 w-4 text-green-400" />
+                              <span className="text-base font-bold text-white">
+                                {event.rate || "Free"}
                               </span>
                             </div>
 
-                            <div className="absolute bottom-4 left-4 right-4">
-                              <h3 className="font-bold text-xl text-white mb-2 line-clamp-2 group-hover:text-purple-300 transition-colors">
-                                {event.name}
-                              </h3>
-                            </div>
+                            {event.event_url && (
+                              <span className="flex items-center gap-1 text-xs text-purple-400 group-hover:text-purple-300 font-medium transition-colors">
+                                View Event
+                                <ArrowRight className="h-3 w-3 group-hover:translate-x-0.5 transition-transform" />
+                              </span>
+                            )}
                           </div>
-
-                          <div className="p-4 space-y-3">
-                            <div className="flex items-center gap-2 text-sm text-slate-300">
-                              <Clock className="h-4 w-4 text-purple-400 flex-shrink-0" />
-                              <span className="font-medium">{formatTime(event.date)}</span>
-                            </div>
-
-                            <div className="flex items-center gap-2 text-sm text-slate-300">
-                              <MapPin className="h-4 w-4 text-purple-400 flex-shrink-0" />
-                              <span className="line-clamp-1">{event.location}</span>
-                            </div>
-
-                            <div className="flex items-center gap-1 pt-2 border-t border-white/10">
-                              <IndianRupee className="h-5 w-5 text-green-400" />
-                              <span className="text-xl font-bold text-white">{event.rate || '0'}</span>
-                            </div>
-                          </div>
-                        </article>
-                      )})}
-                    </div>
-
-                    {/* PAGINATION */}
-                    {totalPages > 1 && (
-                      <div className="flex justify-center items-center gap-6 mt-12">
-                        <button
-                          onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                          disabled={currentPage === 1}
-                          className="p-3 rounded-xl bg-white/5 border border-white/10 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-white/10 transition-all"
-                        >
-                          <ChevronLeft className="h-5 w-5" />
-                        </button>
-                        
-                        <div className="flex items-center gap-2">
-                          {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                            let pageNum;
-                            if (totalPages <= 5) {
-                              pageNum = i + 1;
-                            } else if (currentPage <= 3) {
-                              pageNum = i + 1;
-                            } else if (currentPage >= totalPages - 2) {
-                              pageNum = totalPages - 4 + i;
-                            } else {
-                              pageNum = currentPage - 2 + i;
-                            }
-                            
-                            return (
-                              <button
-                                key={pageNum}
-                                onClick={() => setCurrentPage(pageNum)}
-                                className={`w-10 h-10 rounded-xl font-semibold transition-all ${
-                                  currentPage === pageNum
-                                    ? 'bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white shadow-lg shadow-purple-500/30'
-                                    : 'bg-white/5 text-slate-300 hover:bg-white/10 border border-white/10'
-                                }`}
-                              >
-                                {pageNum}
-                              </button>
-                            );
-                          })}
                         </div>
+                      </article>
+                    ))}
+                  </div>
 
-                        <button
-                          onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                          disabled={currentPage === totalPages}
-                          className="p-3 rounded-xl bg-white/5 border border-white/10 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-white/10 transition-all"
-                        >
-                          <ChevronRight className="h-5 w-5" />
-                        </button>
+                  {/* PAGINATION */}
+                  {totalPages > 1 && (
+                    <div className="flex justify-center items-center gap-4 mt-14">
+                      <button
+                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                        className="p-3 rounded-xl bg-white/5 border border-white/10 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-white/10 transition-all"
+                      >
+                        <ChevronLeft className="h-5 w-5" />
+                      </button>
+
+                      <div className="flex items-center gap-2">
+                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                          let pageNum: number;
+                          if (totalPages <= 5) {
+                            pageNum = i + 1;
+                          } else if (currentPage <= 3) {
+                            pageNum = i + 1;
+                          } else if (currentPage >= totalPages - 2) {
+                            pageNum = totalPages - 4 + i;
+                          } else {
+                            pageNum = currentPage - 2 + i;
+                          }
+                          return (
+                            <button
+                              key={pageNum}
+                              onClick={() => setCurrentPage(pageNum)}
+                              className={`w-10 h-10 rounded-xl font-semibold transition-all ${
+                                currentPage === pageNum
+                                  ? "bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white shadow-lg shadow-purple-500/30"
+                                  : "bg-white/5 text-slate-300 hover:bg-white/10 border border-white/10"
+                              }`}
+                            >
+                              {pageNum}
+                            </button>
+                          );
+                        })}
                       </div>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-          </div>
+
+                      <button
+                        onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                        disabled={currentPage === totalPages}
+                        className="p-3 rounded-xl bg-white/5 border border-white/10 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-white/10 transition-all"
+                      >
+                        <ChevronRight className="h-5 w-5" />
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
         </div>
       </div>
     </UserShell>
